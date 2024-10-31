@@ -22,8 +22,8 @@ func (cfg *apiConfig) handlerMetrics(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	fmt.Fprintf(w, "Hits: %d", cfg.fileserverHits.Load())
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	fmt.Fprintf(w, "<html>\n  <body>\n    <h1>Welcome, Chirpy Admin</h1>\n    <p>Chirpy has been visited %d times!</p>\n  </body>\n</html>", cfg.fileserverHits.Load())
 }
 
 func (cfg *apiConfig) handlerReset(w http.ResponseWriter, r *http.Request) {
@@ -44,7 +44,7 @@ func main() {
 	apiCfg := &apiConfig{}
 
 	// Step 3: Add the readiness endpoint handler (GET only)
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/healthz", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 			return
@@ -59,10 +59,10 @@ func main() {
 	mux.Handle("/app/", apiCfg.middlewareMetricsInc(http.StripPrefix("/app", fileServer)))
 
 	// Step 5: Add the metrics handler (GET only)
-	mux.HandleFunc("/metrics", apiCfg.handlerMetrics)
+	mux.HandleFunc("/admin/metrics", apiCfg.handlerMetrics)
 
 	// Step 6: Add the reset handler (POST only)
-	mux.HandleFunc("/reset", apiCfg.handlerReset)
+	mux.HandleFunc("/admin/reset", apiCfg.handlerReset)
 
 	// Step 7: Create the http.Server struct
 	server := &http.Server{
