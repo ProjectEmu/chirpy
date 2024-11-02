@@ -1,78 +1,93 @@
 package main
 
 import (
-	"fmt"
+	"context"
+	"database/sql"
+	"log"
 	"net/http"
-	"sync/atomic"
+	"os"
+	"os/signal"
+	"time"
+
+	"github.com/ProjectEmu/chirpy/api/handlers"
+	"github.com/ProjectEmu/chirpy/internal/database"
+	"github.com/joho/godotenv"
+	_ "github.com/lib/pq"
 )
 
-type apiConfig struct {
-	fileserverHits atomic.Int32
-}
-
-func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		cfg.fileserverHits.Add(1)
-		next.ServeHTTP(w, r)
-	})
-}
-
-func (cfg *apiConfig) handlerMetrics(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	fmt.Fprintf(w, "<html>\n  <body>\n    <h1>Welcome, Chirpy Admin</h1>\n    <p>Chirpy has been visited %d times!</p>\n  </body>\n</html>", cfg.fileserverHits.Load())
-}
-
-func (cfg *apiConfig) handlerReset(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	cfg.fileserverHits.Store(0)
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.Write([]byte("Hits counter reset to 0"))
-}
-
 func main() {
-	// Step 1: Create a new http.ServeMux
+	// Load environment variables from .env file
+	if err := godotenv.Load(); err != nil {
+		log.Fatalf("Failed to load environment variables: %v", err)
+	}
+
+	// Get database URL and platform from environment variables
+	dbURL := os.Getenv("DB_URL")
+	platform := os.Getenv("PLATFORM")
+	JWTSecret := os.Getenv("JWTSECRET")
+
+	// Connect to the database
+	db, err := sql.Open("postgres", dbURL)
+	if err != nil {
+		log.Fatalf("Failed to connect to the database: %v", err)
+	}
+	defer db.Close()
+
+	// Initialize SQLC queries
+	dbQueries := database.New(db)
+
+	// Setup the HTTP multiplexer
 	mux := http.NewServeMux()
 
-	// Step 2: Create the apiConfig instance
-	apiCfg := &apiConfig{}
-
-	// Step 3: Add the readiness endpoint handler (GET only)
+	// Health check endpoint
 	mux.HandleFunc("/api/healthz", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 			return
 		}
+
+		// Check database connection
+		if err := db.Ping(); err != nil {
+			http.Error(w, "Service Unavailable", http.StatusServiceUnavailable)
+			return
+		}
+
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
 	})
 
-	// Step 4: Update the file server path to "/app/" and use StripPrefix, wrapped with middleware
-	fileServer := http.FileServer(http.Dir("."))
-	mux.Handle("/app/", apiCfg.middlewareMetricsInc(http.StripPrefix("/app", fileServer)))
+	// Set up other API routes via handlers
+	handlers.SetupRoutes(mux, dbQueries, platform, JWTSecret)
 
-	// Step 5: Add the metrics handler (GET only)
-	mux.HandleFunc("/admin/metrics", apiCfg.handlerMetrics)
-
-	// Step 6: Add the reset handler (POST only)
-	mux.HandleFunc("/admin/reset", apiCfg.handlerReset)
-
-	// Step 7: Create the http.Server struct
+	// Create the HTTP server
 	server := &http.Server{
-		Addr:    ":8080", // Listen on port 8080
-		Handler: mux,     // Use the ServeMux with the handlers
+		Addr:    ":8080",
+		Handler: mux,
 	}
 
-	// Step 8: Start the server using ListenAndServe
-	err := server.ListenAndServe()
-	if err != nil {
-		panic(err) // Panic if the server fails to start
+	// Channel to listen for interrupt signals
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt)
+
+	// Run the server in a separate goroutine
+	go func() {
+		log.Println("Starting server on :8080")
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("ListenAndServe(): %s", err)
+		}
+	}()
+
+	// Wait for an interrupt signal
+	<-stop
+
+	// Create a context with a timeout to allow the server to gracefully shut down
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	log.Println("Shutting down server...")
+	if err := server.Shutdown(ctx); err != nil {
+		log.Fatalf("Server Shutdown Failed:%+v", err)
 	}
+	log.Println("Server exited gracefully")
 }
