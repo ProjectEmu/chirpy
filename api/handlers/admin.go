@@ -17,23 +17,31 @@ func (cfg *apiConfig) handlerReset(w http.ResponseWriter, r *http.Request) {
 		respondWithError(w, http.StatusForbidden, "Forbidden in non-development environments")
 		return
 	}
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 
+	// Delete all chirps
 	err := cfg.DB.DeleteAllChirps(r.Context())
 	if err != nil {
 		log.Printf("Error deleting chirps: %s", err)
 		respondWithError(w, http.StatusInternalServerError, "Could not reset chirps")
 		return
 	}
-	w.Write([]byte("All chirps deleted"))
+
+	// Delete all refresh tokens
+	err = cfg.DB.DeleteAllRefreshTokens(r.Context())
+	if err != nil {
+		log.Printf("Error deleting refresh tokens: %s", err)
+		respondWithError(w, http.StatusInternalServerError, "Could not reset refresh tokens")
+		return
+	}
+
 	err = cfg.DB.DeleteAllUsers(r.Context())
 	if err != nil {
 		log.Printf("Error deleting users: %s", err)
 		respondWithError(w, http.StatusInternalServerError, "Could not reset users")
 		return
 	}
-	w.Write([]byte("All users deleted"))
-	cfg.fileserverHits.Store(0)
 
-	w.Write([]byte("Hits counter reset to 0"))
+	cfg.fileserverHits.Store(0)
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Write([]byte("All chirps, refresh tokens, and users deleted. Hits counter reset to 0"))
 }

@@ -9,7 +9,9 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/ProjectEmu/chirpy/config"
 	authy "github.com/ProjectEmu/chirpy/internal/auth"
+	"github.com/ProjectEmu/chirpy/internal/database"
 
 	_ "github.com/lib/pq"
 )
@@ -33,9 +35,9 @@ func (cfg *apiConfig) handlerUserLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	expires := 3600
+	expires := config.AccessTokenDuration
 	// Parse and check Expires
-	if req.Expires > 0 && req.Expires < 3600 {
+	if req.Expires > 0 && req.Expires < config.AccessTokenDuration {
 		expires = req.Expires
 	}
 
@@ -63,23 +65,43 @@ func (cfg *apiConfig) handlerUserLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get token
+	// Get access token
 	token, err := authy.MakeJWT(user.ID, cfg.JWTSecret, time.Duration(expires)*time.Second)
 	if err != nil {
 		log.Printf("Could not fetch JWT: %s", err)
 		respondWithError(w, http.StatusInternalServerError, "Could not fetch JWT")
 	}
+	// Get refresh token
+	refresh_token, err := authy.MakeRefreshToken()
+	if err != nil {
+		log.Printf("Could not fetch refresh token: %s", err)
+		respondWithError(w, http.StatusInternalServerError, "Could not fetch refresh token")
+	}
+	// Store refresh token
+	expiryDate := time.Now().AddDate(0, 0, config.RefreshTokenDuration)
+	request_tokenParams := database.CreateRefreshTokenParams{
+		Token:     refresh_token,
+		UserID:    user.ID,
+		ExpiresAt: expiryDate,
+	}
+	_, err = cfg.DB.CreateRefreshToken(r.Context(), request_tokenParams)
+	if err != nil {
+		log.Printf("Could not store refresh token: %s", err)
+		respondWithError(w, http.StatusInternalServerError, "Could not store refresh token")
+	}
 	// Map database.User to the User struct to control JSON keys
-
 	var responseUser struct {
 		User
-		Token string `json:"token"`
+		Token         string `json:"token"`
+		Refresh_Token string `json:"refresh_token"`
 	}
 	responseUser.ID = user.ID
 	responseUser.CreatedAt = user.CreatedAt
 	responseUser.UpdatedAt = user.UpdatedAt
 	responseUser.Email = user.Email
 	responseUser.Token = token
+	responseUser.Refresh_Token = refresh_token
+	responseUser.IsChirpyRed = user.IsChirpyRed
 
 	respondWithJSON(w, http.StatusOK, responseUser)
 }

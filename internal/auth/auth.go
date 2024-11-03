@@ -1,6 +1,8 @@
 package authy
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"net/http"
 	"strings"
@@ -93,4 +95,38 @@ func CheckPasswordHash(password, hash string) error {
 	// bcrypt.CompareHashAndPassword returns nil if the password matches the hash.
 	err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password))
 	return err
+}
+
+// MakeRefreshToken generates a random 256-bit (32-byte) hex-encoded string for use as a refresh token.
+func MakeRefreshToken() (string, error) {
+	// Create a 32-byte slice to hold the random data
+	randomBytes := make([]byte, 32)
+
+	// Read 32 random bytes from crypto/rand into the slice
+	_, err := rand.Read(randomBytes)
+	if err != nil {
+		return "", errors.New("failed to generate random bytes for refresh token")
+	}
+
+	// Convert the random bytes to a hex-encoded string
+	refreshToken := hex.EncodeToString(randomBytes)
+	return refreshToken, nil
+}
+
+func GetAPIKey(headers http.Header) (string, error) {
+	header := headers.Get("Authorization")
+	if header == "" {
+		return "", errors.New("authorization header missing")
+	}
+
+	if !strings.HasPrefix(header, "ApiKey ") {
+		return "", errors.New("authorization header format must be ApiKey {token}")
+	}
+
+	apiKey := strings.TrimPrefix(header, "ApiKey ")
+	if apiKey == "" {
+		return "", errors.New("ApiKey is empty")
+	}
+
+	return apiKey, nil
 }
